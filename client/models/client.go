@@ -16,4 +16,5 @@ type Client struct {
 	Name    string
 	Conn    net.Conn
 	MsgType MessageType
+	Msg     string
 }

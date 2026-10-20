@@ -8,7 +8,6 @@ import (
 )
 
 func main() {
-
 	log.Printf("Welcome from Gofka\n")
 	server, err := net.Listen("tcp", ":6969")
 	if err != nil {

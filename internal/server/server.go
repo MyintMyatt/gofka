@@ -43,7 +43,7 @@ func NewGofkaServer() *GofkaServer {
 
 func (gs *GofkaServer) HandleConnection(conn net.Conn) {
 	client := &cmodels.Client{
-		Name:    "anon@" + conn.RemoteAddr().String(),
+		Name:    "anon@" + strings.SplitN(conn.RemoteAddr().String(), ":", 2)[1],
 		Conn:    conn,
 		MsgType: cmodels.ClientConnected,
 	}
@@ -120,17 +120,49 @@ func (gs *GofkaServer) unRegisterWorker() {
 			_ = client.Conn.Close()
 			log.Printf("Client unregistered: %s", client.Name)
 
-			gs.broadCastSystemWide(fmt.Sprintf("*** Hey guys, unforturnely %s left the chat! ***\n", client.Name))
+			gs.broadCastSystemWide(fmt.Sprintf("Hey guys, unforturnely %s left the chat!.", client.Name))
 		} else {
 			gs.mu.Unlock()
 		}
 	}
 }
 
+func (gs *GofkaServer) findClientByName(name string) *cmodels.Client {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+
+	for client := range gs.Clients {
+		if strings.EqualFold(client.Name, name) {
+			return client
+		}
+	}
+
+	return nil
+}
+
 // broad cast
 func (gs *GofkaServer) broadCastWroker() {
 	for client := range gs.clientSentMessageChann {
 		msg := client.Msg
+
+		if strings.HasPrefix(msg, "@") {
+			parts := strings.SplitN(msg, " ", 2)
+			if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+				_, _ = client.Conn.Write([]byte("Usage: @username <message>\n"))
+				continue
+			}
+			receiver := gs.findClientByName(strings.TrimPrefix(parts[0], "@"))
+			if receiver == nil {
+				_, _ = client.Conn.Write(fmt.Appendf([]byte("### User "), "%s not found\n", parts[0]))
+				continue
+			}
+
+			if _, err := receiver.Conn.Write(fmt.Appendf([]byte(""), "[%s]: %s\n", client.Name, parts[1])); err != nil {
+				log.Printf("Failed to send private message to %s: %v", receiver.Name, err)
+				gs.clientDisconnectedChann <- receiver
+			}
+			continue
+		}
 
 		if strings.HasPrefix(msg, "/") {
 			parts := strings.SplitN(msg, " ", 2)
@@ -150,8 +182,8 @@ func (gs *GofkaServer) broadCastWroker() {
 				client.Name = newName
 				gs.mu.Unlock()
 
-				_, _ = client.Conn.Write([]byte(fmt.Sprintf("Name set to: %s\n", newName)))
-				gs.broadCastSystemWide(fmt.Sprintf("*** %s is now known as %s ***\n", oldName, newName))
+				_, _ = client.Conn.Write(fmt.Appendf([]byte("Name set to: "), "%s\n", newName))
+				gs.broadCastSystemWide(fmt.Sprintf("%s is now known as %s.", oldName, newName))
 				continue
 			case "/q":
 				_, _ = client.Conn.Write([]byte("Goodbye!\n"))
@@ -162,7 +194,7 @@ func (gs *GofkaServer) broadCastWroker() {
 				gs.mu.Lock()
 				count := 1
 				for cl := range gs.Clients {
-					client.Conn.Write([]byte(fmt.Sprintf("#[%d]: %s\n", count, cl.Name)))
+					client.Conn.Write([]byte(fmt.Appendf([]byte("#"), "[%d]: %s\n", count, cl.Name)))
 					count++
 				}
 				gs.mu.Unlock()
@@ -200,6 +232,6 @@ func (gs *GofkaServer) broadCastSystemWide(msg string) {
 	defer gs.mu.Unlock()
 
 	for c := range gs.Clients {
-		_, _ = c.Conn.Write([]byte(msg))
+		_, _ = c.Conn.Write(fmt.Appendln([]byte("[all]: "), msg))
 	}
 }
